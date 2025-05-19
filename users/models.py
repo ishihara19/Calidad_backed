@@ -87,7 +87,12 @@ class CustomUser(AbstractUser):
     class Meta:
         verbose_name = "Usuario"
         verbose_name_plural = "Usuarios"
-        
+    
+    def save(self, *args, **kwargs):
+        if not self.empresa:
+            print("XD")
+        super().save(*args, **kwargs)        
+                 
 
     def __str__(self):
         return f"{self.document} - {self.first_name} {self.last_name}" 

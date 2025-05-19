@@ -17,33 +17,37 @@ from .serializers import(
 class CustomUserCreateView(generics.CreateAPIView):
     queryset = CustomUser.objects.all()
     serializer_class = CustomUserSerializer
-    permission_classes = []  # Ajusta según tu necesidad
+    permission_classes = [] # Ajusta según tu necesidad
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         try:
             serializer.is_valid(raise_exception=True)
-        except ValidationError as e:
-            print("errors",e.detail)
+        except ValidationError as e: # Esto capturará errores del serializer.validate() o serializer.create()
+            print("errors en la vista:", e.detail) # Para debugging en el servidor
             return Response(
                 {
                     "message": "Error al registrar el usuario.",
-                    "errors": serializer.errors  # También puedes usar `e.detail` si prefieres
+                    # serializer.errors ya contendrá el error de codigo_empresa si se lanzó desde create
+                    "errors": serializer.errors if hasattr(serializer, 'errors') else e.detail 
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        self.perform_create(serializer)
+        
+        # Si la validación es exitosa, perform_create llamará a serializer.save(),
+        # lo cual a su vez llama a serializer.create() con los validated_data.
+        self.perform_create(serializer) 
+        
         headers = self.get_success_headers(serializer.data)
 
         return Response(
             {
                 "message": "Usuario registrado exitosamente.",
-                "user": serializer.data
+                "user": serializer.data # serializer.data contendrá el usuario creado, incluyendo la empresa si se vinculó
             },
             status=status.HTTP_201_CREATED,
             headers=headers
         )
-
 class DocumentTypeListView(generics.ListAPIView):
     queryset = DocumentType.objects.all()
     serializer_class= DocumentTypeSerializer
