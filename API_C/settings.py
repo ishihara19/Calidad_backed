@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'drf_yasg',
     'empresa',
     'normas',
+    'matriz',
 ]
 AUTH_USER_MODEL = 'users.CustomUser'
 

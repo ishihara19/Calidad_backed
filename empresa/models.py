@@ -1,5 +1,5 @@
 from django.db import models
-from API_C.utils import generate_unique_id
+from API_C.utils import generate_unique_id, generar_codigo_empresa
 # Create your models here.
 class Empresa(models.Model):
     
@@ -9,7 +9,8 @@ class Empresa(models.Model):
     direccion = models.CharField(max_length=255)
     email = models.EmailField()
     telefono = models.CharField(max_length=15)
-    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_creacion = models.DateTimeField(auto_now_add=True, null=True)
+    codigo_empresa = models.CharField(max_length=8,null=True)
     
     class Meta:
         verbose_name = 'Empresa'
@@ -19,6 +20,10 @@ class Empresa(models.Model):
         return f"{self.id} - {self.nombre}"
     
     def save(self,*args, **kwargs):
+        
+        if not self.codigo_empresa:
+            self.codigo_empresa = generar_codigo_empresa(Empresa)
+            
         if not self.id:
             prefix = f"Em-{self.nit}"
             self.id = generate_unique_id(Empresa,prefix)  

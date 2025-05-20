@@ -2,18 +2,35 @@ from rest_framework import serializers
 from .models import Norma, Caracteristica, SubCaracteristica, CalificacionSubCaracteristica
 
 class CalificacionSubCaracteristicaSerializer(serializers.ModelSerializer):
+    subcaracteristica = serializers.PrimaryKeyRelatedField(
+        queryset=SubCaracteristica.objects.all(),
+        help_text="ID de la subcaracterística a calificar."
+    )
     class Meta:
         model = CalificacionSubCaracteristica
-        fields = "__all__"
-        read_only_fields = ['id', 'valor_maximo']
-    
-    def validate(self, data):
-        if data["puntos"] > data["valor_maximo"]:
-            raise serializers.ValidationError("Los puntos no puden ser mayores que el valor maximo")
-        if data["puntos"] < 0:
-            raise serializers.ValidationError("Los puntos no puden ser menores que 0")
+        fields = [
+            'id', 
+            'subcaracteristica', 
+            'observacion', 
+            'puntos', 
+            'codigo_calificacion', # Se incluirá en la respuesta
+            'usuario',             # Se incluirá en la respuesta
+            'empresa',             # Se incluirá en la respuesta
+            'fecha_cracion'        # Se incluirá en la respuesta
+        ]
+        read_only_fields = [
+            'id', 
+            'codigo_calificacion', 
+            'usuario',
+            'empresa',               
+            'fecha_cracion'
+        ]
         
-        return data   
+        def validate_puntos(self, value):
+            if value < 0 or value > 3:
+                raise serializers.ValidationError("Los puntos deben estar entre 0 y 3.")
+            return value 
+    
 
 class SubCaracteristicaSerializer(serializers.ModelSerializer):
     

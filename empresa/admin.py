@@ -3,7 +3,7 @@ from .models import Empresa
 
 @admin.register(Empresa)
 class EmpresaAdmin(admin.ModelAdmin):
-    list_display = ('id', 'nombre', 'nit', 'email', 'telefono', 'fecha_creacion')
+    list_display = ('id', 'nombre', 'nit', 'email', 'telefono', 'fecha_creacion','codigo_empresa')
     list_filter = ('fecha_creacion',)
     search_fields = ('nombre', 'nit', 'email')
     ordering = ('-fecha_creacion',)
@@ -11,7 +11,7 @@ class EmpresaAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Información general', {
-            'fields': ('id', 'nombre', 'nit', 'direccion', 'email', 'telefono')
+            'fields': ('id', 'nombre', 'nit', 'direccion', 'email', 'telefono','codigo_empresa')
         }),
         ('Fechas', {
             'fields': ('fecha_creacion',)
