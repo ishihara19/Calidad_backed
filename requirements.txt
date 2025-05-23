@@ -4,7 +4,6 @@ Django==5.2
 django-cors-headers==4.7.0
 django-filter==25.1
 djangorestframework==3.16.0
-djangorestframework-filters==0.11.1
 drf-yasg==1.21.10
 inflection==0.5.1
 packaging==25.0
