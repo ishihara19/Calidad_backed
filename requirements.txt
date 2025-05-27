@@ -14,3 +14,5 @@ sqlparse==0.5.3
 typing_extensions==4.13.2
 tzdata==2025.2
 uritemplate==4.1.1
+djangorestframework-nested==0.1.1  # Para rutas anidadas
+

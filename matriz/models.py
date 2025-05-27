@@ -1,95 +1,303 @@
+# matriz/models.py
 from django.db import models
 from django.conf import settings
-from django.core.validators import MaxValueValidator,MinValueValidator
+from django.core.validators import MaxValueValidator, MinValueValidator
+from API_C.utils import generate_unique_id
+import json
+
+class MatrizRiesgo(models.Model):
+    """Modelo principal para las matrices de riesgo"""
+    
+    id = models.CharField(max_length=20, primary_key=True, editable=False)
+    nombre = models.CharField(max_length=200, verbose_name="Nombre de la Matriz")
+    descripcion = models.TextField(blank=True, verbose_name="Descripción")
+    responsable = models.CharField(max_length=100, blank=True, verbose_name="Responsable")
+    fecha_creacion = models.DateField(verbose_name="Fecha de Creación")
+    fecha_modificacion = models.DateTimeField(auto_now=True, verbose_name="Fecha de Modificación")
+    
+    # Relación con usuario y empresa
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True, 
+        verbose_name="Creado por"
+    )
+    empresa = models.ForeignKey(
+        'empresa.Empresa',
+        on_delete=models.CASCADE,
+        related_name='matrices_riesgo',
+        verbose_name="Empresa"
+    )
+    
+    class Meta:
+        verbose_name = "Matriz de Riesgo"
+        verbose_name_plural = "Matrices de Riesgo"
+        ordering = ['-fecha_modificacion']
+    
+    def __str__(self):
+        return self.nombre
+    
+    def save(self, *args, **kwargs):
+        if not self.id:
+            prefix = f"MR-{self.empresa.codigo_empresa if self.empresa.codigo_empresa else 'SIN'}"
+            self.id = generate_unique_id(MatrizRiesgo, prefix)
+        super().save(*args, **kwargs)
+    
+    @property
+    def total_riesgos(self):
+        return self.riesgos.count()
+    
+    @property
+    def resumen_riesgos_por_nivel(self):
+        resumen = {'EXTREMA': 0, 'ALTA': 0, 'MODERADA': 0, 'BAJA': 0, 'MUY_BAJA': 0}
+        for riesgo in self.riesgos.all():
+            zona = riesgo.calcular_zona_riesgo()
+            nivel_key = zona['nivel'].replace(' ', '_')
+            if nivel_key in resumen:
+                resumen[nivel_key] += 1
+        return resumen
 
 
-class Riesgos(models.Model):   
-    nombre = models.CharField(max_length=30, verbose_name="Nombre del riesgo")
-    def __str__(self):
-        return self.nombre
+class RiesgoMatriz(models.Model):
+    """Modelo para los riesgos individuales dentro de una matriz"""
     
-class Procesos(models.Model):
-    nombre = models.CharField(max_length=30, verbose_name="Nombre del proceso")
-    descripcion = models.CharField(max_length=255, verbose_name="Descipcion del proceso")
-    def __str__(self):
-        return self.nombre
+    TIPOS_RIESGO = [
+        ('Operativo', 'Operativo'),
+        ('Estratégico', 'Estratégico'),
+        ('Financiero', 'Financiero'),
+        ('Cumplimiento', 'Cumplimiento'),
+        ('Tecnológico', 'Tecnológico'),
+    ]
     
-class TipoRiesgos(models.Model):   
-    nombre = models.CharField(max_length=50, verbose_name="Nombre del tipo de riesgo")
-    def __str__(self):
-        return self.nombre
+    TIPOS_CONTROL = [
+        ('Preventivo', 'Preventivo'),
+        ('Correctivo', 'Correctivo'),
+        ('Detectivo', 'Detectivo'),
+    ]
     
-class RiesgoAsociados(models.Model):
-    nombre = models.CharField(max_length=30, verbose_name="Nombre de los riesgos asociados")
+    # Relación con la matriz
+    matriz = models.ForeignKey(
+        MatrizRiesgo, 
+        on_delete=models.CASCADE, 
+        related_name='riesgos'
+    )
+    
+    # Información básica del riesgo
+    numero = models.PositiveIntegerField(verbose_name="Número")
+    fecha = models.DateField(verbose_name="Fecha")
+    codigo = models.CharField(max_length=50, blank=True, verbose_name="Código")
+    nombre = models.CharField(max_length=300, verbose_name="Nombre del Riesgo")
+    descripcion = models.TextField(blank=True, verbose_name="Descripción del Riesgo")
+    efectos = models.TextField(blank=True, verbose_name="Efectos/Consecuencias")
+    tipo_riesgo = models.CharField(
+        max_length=20, 
+        choices=TIPOS_RIESGO, 
+        blank=True, 
+        verbose_name="Tipo de Riesgo"
+    )
+    
+    # Evaluación del riesgo
+    probabilidad = models.IntegerField(
+        default=1, 
+        validators=[MinValueValidator(1), MaxValueValidator(5)], 
+        verbose_name="Probabilidad"
+    )
+    impacto = models.IntegerField(
+        default=1, 
+        validators=[MinValueValidator(1), MaxValueValidator(5)], 
+        verbose_name="Impacto"
+    )
+    
+    # Controles
+    controles_existentes = models.TextField(
+        blank=True, 
+        verbose_name="Controles Existentes"
+    )
+    tipo_control = models.CharField(
+        max_length=20, 
+        choices=TIPOS_CONTROL, 
+        default='Preventivo', 
+        verbose_name="Tipo de Control"
+    )
+    efectividad_control = models.IntegerField(
+        default=0, 
+        validators=[MinValueValidator(0), MaxValueValidator(100)], 
+        verbose_name="Efectividad del Control (%)"
+    )
+    
+    # Evaluación de controles (almacenado como JSON)
+    controles_evaluacion = models.JSONField(
+        default=dict, 
+        blank=True, 
+        verbose_name="Evaluación de Controles"
+    )
+    
+    # Tratamiento
+    tratamiento = models.TextField(
+        blank=True, 
+        verbose_name="Tratamiento/Controles Propuestos"
+    )
+    responsable_control = models.CharField(
+        max_length=100, 
+        blank=True, 
+        verbose_name="Responsable del Control"
+    )
+    aceptado = models.BooleanField(
+        default=False, 
+        verbose_name="¿Se acepta el riesgo?"
+    )
+    
+    class Meta:
+        verbose_name = "Riesgo"
+        verbose_name_plural = "Riesgos"
+        ordering = ['numero']
+        unique_together = ['matriz', 'numero']
+    
     def __str__(self):
-        return self.nombre    
+        return f"{self.codigo or self.numero} - {self.nombre}"
+    
+    def calcular_zona_riesgo(self):
+        """Calcula la zona de riesgo basada en probabilidad e impacto"""
+        valor = self.probabilidad * self.impacto
+        if valor >= 15:
+            return {'nivel': 'EXTREMA', 'color': 'bg-red-600', 'valor': valor}
+        elif valor >= 10:
+            return {'nivel': 'ALTA', 'color': 'bg-red-400', 'valor': valor}
+        elif valor >= 6:
+            return {'nivel': 'MODERADA', 'color': 'bg-yellow-400', 'valor': valor}
+        elif valor >= 3:
+            return {'nivel': 'BAJA', 'color': 'bg-green-400', 'valor': valor}
+        else:
+            return {'nivel': 'MUY BAJA', 'color': 'bg-green-600', 'valor': valor}
+    
+    @property
+    def zona_riesgo(self):
+        return self.calcular_zona_riesgo()
+    
+    def save(self, *args, **kwargs):
+        # Inicializar controles_evaluacion si está vacío
+        if not self.controles_evaluacion:
+            self.controles_evaluacion = {
+                'herramienta': False,
+                'manuales': False,
+                'efectividad': False,
+                'responsables': False,
+                'frecuencia': False
+            }
+        super().save(*args, **kwargs)
 
-class PosibleOcurrencia(models.Model):
-    nombre = models.CharField(max_length=50, verbose_name="Nombee de posibles ocurrencia")
-    valor = models.IntegerField(validators=[MinValueValidator(1),MaxValueValidator(5)], help_text="Valor de posible ocurrencia Debe de ser entre 0 y 5")
-    def __str__(self):
-        return self.nombre
-# 
-class Impacto(models.Model):
-    nombre = models.CharField(max_length=50, verbose_name="Nombre de impactos")
-    valor = models.IntegerField(validators=[MinValueValidator(1),MaxValueValidator(5)], help_text="Valor de impacto Debe de ser entre 0 y 5")
-    def __str__(self):
-        return self.nombre
-    
-class OpcionTratamiento(models.Model):
-    nombre = models.CharField(max_length=50, verbose_name="Nombre de opcion de tratamiento de riego")
-    def __str__(self):
-        return self.nombre        
-    
-class Matriz(models.Model):
-    
-    class RiesgoAfectacion(models.TextChoices):
-        SI = "SI", ("SI")
-        NO = "NO", ("NO")
-        NA = "NA", ("NA")
-        
-    class TipoImpacto(models.TextChoices):
-        CONTINUIDAD_OPERATIVA = "Continuidad Operativa",("Continuidad Operativa")
-        IMAGEN = "Imagen",("Imagen")
-        LEGAL = "Legal", ("Legal")
-    
-    class ZonaRiesgo(models.TextChoices):
-        BAJA = "BAJA",("BAJA")
-        MODERADA = "MODERADA",("MODERADA")
-        ALTA = "ALTA", ("ALTA")
-        EXTREMA = "EXTREMA",("EXTREMA")
-    
-    class TipoControl(models.TextChoices):
-        PREVENTIVO = "Preventivo", ("Preventivo")
-        CORRECTIVO = "Correctivo", ("Correctivo")
-        N_A = "N/A",("N/A")    
-                        
-        
-    id = models.CharField(max_length=10, primary_key=True, verbose_name="Id matriz", help_text="ID de la matriz de riesgo", db_index=True)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, verbose_name="Usuario", help_text="Usuario que realiza la accion al crear una matriz de risgo")
-    fecha_riesgo = models.DateField(verbose_name="Fecha identificacion riesgo",help_text="Fecha de identificación riesgo")
-    codigo_riesgo = models.CharField(verbose_name="Codigo del riesgo",help_text="Código del riesgo")
-    riesgo = models.ForeignKey(Riesgos, on_delete=models.CASCADE, verbose_name="Tipo de riesgo",help_text="Riesgo")
-    descripcion = models.CharField(max_length=255, verbose_name="Definición y Descripción del riesgo", help_text="Definición y Descripción del riesgo")
-    causas = models.TextField(verbose_name="Causas de riesgo", help_text="Causas (un riesgo puede tener mas de una causa) Vulnerabilidad - Amenazas")
-    efectos = models.CharField(max_length=255,verbose_name="Definición de los efectos del riesgo", help_text="Definición de los efectos de materialización del riesgo identificado")
-    afectacion = models.CharField(max_length=255,verbose_name="Afecta infraestructua crítica", help_text="Riesgo afecta infraestructua crítica" )
-    riesgo_afectacion = models.CharField(max_length=2, choices=RiesgoAfectacion,verbose_name="Riesgo afecta",help_text="Riesgo afecta infraestructua crítica")
-    informacion_asosiada = models.CharField(max_length=255, verbose_name="Activos de informacion", help_text="Activos de Información Asociados" )
-    tipo_activo = models.CharField(max_length=255, verbose_name="Tipo de activo",help_text="Tipo de activo vinculado")
-    criterio_activo = models.CharField(max_length=255, verbose_name="Criticidad del activo", help_text="Criticidad del activo")
-    proceso = models.ForeignKey(Procesos, on_delete=models.CASCADE, verbose_name="Proceso", help_text="Proceso")
-    dueño_riesgo = models.CharField(max_length=100, verbose_name="Dueño del riesgo", help_text="Dueño o propietario del riesgo")
-    rol_dueño_riesgo = models.CharField(max_length=30, verbose_name="Rol dueño del riesgo", help_text="Rol del dueño o propietario del riesgo")
-    riesgo_asociados = models.ManyToManyField(RiesgoAsociados)
-    tipo_impacto = models.CharField(max_length=50, choices=TipoImpacto, verbose_name="Tipo de Impacto",help_text="Tipo de Impacto")
-    controles = models.CharField(max_length=255, verbose_name="Controles existentes",help_text="Controles existentes")    
-    Posibilidad_ocurrencia = models.ForeignKey(PosibleOcurrencia, on_delete=models.CASCADE, verbose_name="Posibilidad de Ocurrencia", help_text="Posibilidad de Ocurrencia")
-    impacto = models.ForeignKey(Impacto, on_delete=models.CASCADE, verbose_name="Impacto",help_text="Impacto")
-    zona_riego = models.CharField(max_length=20, choices=ZonaRiesgo, verbose_name="Zona de riesgo", help_text="Zona de riesgo")
-    aceptado = models.CharField(max_length=2, choices=RiesgoAfectacion, verbose_name="¿SE ACEPTA?", help_text="Se acepta o no")
-    tratamiento = models.CharField(max_length=255, verbose_name="Tratamiento Controles a implementar", help_text="Tratamiento Controles a implementar")
-    opcion_tratamiento = models.ForeignKey(OpcionTratamiento, on_delete=models.CASCADE, verbose_name="Nombe de opcion de tratamiento de riego", help_text="Nombe de opcion de tratamiento de riego")
-    tipo_control = models.CharField(max_length=50, verbose_name="Tipo de control", help_text="Tipo de control")
-        
 
+class CausaRiesgo(models.Model):
+    """Modelo para las causas de un riesgo"""
+    
+    FACTORES_CAUSA = [
+        ('Información', 'Información'),
+        ('Método', 'Método'),
+        ('Personas', 'Personas'),
+        ('Sistemas de información', 'Sistemas de información'),
+        ('Infraestructura', 'Infraestructura'),
+    ]
+    
+    riesgo = models.ForeignKey(
+        RiesgoMatriz, 
+        on_delete=models.CASCADE, 
+        related_name='causas'
+    )
+    causa = models.TextField(verbose_name="Descripción de la Causa")
+    factor = models.CharField(
+        max_length=50, 
+        choices=FACTORES_CAUSA, 
+        blank=True, 
+        verbose_name="Factor de Causa"
+    )
+    controles = models.TextField(
+        blank=True, 
+        verbose_name="Controles Asociados"
+    )
+    orden = models.PositiveIntegerField(default=1, verbose_name="Orden")
+    
+    class Meta:
+        verbose_name = "Causa del Riesgo"
+        verbose_name_plural = "Causas del Riesgo"
+        ordering = ['orden']
+    
+    def __str__(self):
+        return f"Causa {self.orden}: {self.causa[:50]}..."
+
+
+class ParametroMatriz(models.Model):
+    """Modelo para los parámetros configurables del sistema"""
+    
+    TIPOS_PARAMETRO = [
+        ('PROBABILIDAD', 'Probabilidad'),
+        ('IMPACTO', 'Impacto'),
+    ]
+    
+    tipo = models.CharField(
+        max_length=20, 
+        choices=TIPOS_PARAMETRO, 
+        verbose_name="Tipo de Parámetro"
+    )
+    valor = models.IntegerField(
+        validators=[MinValueValidator(1), MaxValueValidator(5)], 
+        verbose_name="Valor"
+    )
+    etiqueta = models.CharField(max_length=50, verbose_name="Etiqueta")
+    descripcion = models.TextField(verbose_name="Descripción")
+    activo = models.BooleanField(default=True, verbose_name="Activo")
+    
+    class Meta:
+        verbose_name = "Parámetro del Sistema"
+        verbose_name_plural = "Parámetros del Sistema"
+        unique_together = ['tipo', 'valor']
+        ordering = ['tipo', 'valor']
+    
+    def __str__(self):
+        return f"{self.get_tipo_display()} - {self.valor}: {self.etiqueta}"
+
+
+class AuditoriaMatriz(models.Model):
+    """Modelo para auditar cambios en las matrices"""
+    
+    ACCIONES = [
+        ('CREATE', 'Creación'),
+        ('UPDATE', 'Actualización'),
+        ('DELETE', 'Eliminación'),
+    ]
+    
+    matriz = models.ForeignKey(
+        MatrizRiesgo, 
+        on_delete=models.CASCADE, 
+        related_name='auditoria'
+    )
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True
+    )
+    accion = models.CharField(max_length=10, choices=ACCIONES)
+    descripcion = models.TextField(
+        blank=True, 
+        verbose_name="Descripción del cambio"
+    )
+    fecha_accion = models.DateTimeField(auto_now_add=True)
+    datos_anteriores = models.JSONField(
+        null=True, 
+        blank=True, 
+        verbose_name="Datos anteriores"
+    )
+    datos_nuevos = models.JSONField(
+        null=True, 
+        blank=True, 
+        verbose_name="Datos nuevos"
+    )
+    
+    class Meta:
+        verbose_name = "Auditoría de Matriz"
+        verbose_name_plural = "Auditorías de Matrices"
+        ordering = ['-fecha_accion']
+    
+    def __str__(self):
+        return f"{self.matriz.nombre} - {self.get_accion_display()} - {self.fecha_accion.strftime('%d/%m/%Y %H:%M')}"
