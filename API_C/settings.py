@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'normas',
     'matriz',
     'software',
+    'evaluaciones',
 ]
 AUTH_USER_MODEL = 'users.CustomUser'
 
