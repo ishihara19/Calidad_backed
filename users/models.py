@@ -1,6 +1,8 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from empresa.models import Empresa
+from django.contrib.auth.models import Group
+
 class UserManager(BaseUserManager):
     """
     Administrador de usuarios personalizado para la gestión de usuarios y superusuarios.
@@ -65,6 +67,19 @@ class CustomUser(AbstractUser):
     """
     Modelo de usuario personalizado con autenticación basada en el documento.
     """
+
+    def has_role(self, role_name):
+        """
+        Verifica si el usuario tiene un rol específico
+        """
+        return self.groups.filter(name=role_name).exists()
+    
+    def add_role(self, role_name):
+        """
+        Agrega un rol (grupo) al usuario
+        """
+        group, _ = Group.objects.get_or_create(name=role_name)
+        self.groups.add(group)
 
     document = models.CharField(max_length=12, unique=True, db_index=True, verbose_name="Documento")
     first_name = models.CharField(max_length=50, db_index=True, verbose_name="Nombre")

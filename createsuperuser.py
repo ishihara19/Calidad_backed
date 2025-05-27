@@ -7,6 +7,7 @@ django.setup()
 
 from django.contrib.auth import get_user_model
 from users.models import DocumentType, PersonType
+from django.contrib.auth.models import Group
 User = get_user_model()
 
 document_type = os.environ.get("DJANGO_SUPERUSER_DOCUMENT_TYPE" )
@@ -33,9 +34,13 @@ if None in superuser_data.values():
     print("❌ Error: Faltan variables de entorno para el superusuario.")
     exit(1)
 
-# Verificar si el superusuario ya existe
+# Crear grupo de administradores si no existe
+admin_group, created = Group.objects.get_or_create(name='Administradores')
+
+# Agregar al superusuario al grupo de administradores
 if not User.objects.filter(document=superuser_data["document"]).exists():
-    User.objects.create_superuser(**superuser_data)
-    print("✅ Superusuario creado con éxito.")
+    superuser = User.objects.create_superuser(**superuser_data)
+    superuser.groups.add(admin_group)
+    print("✅ Superusuario creado con éxito y agregado al grupo Administradores.")
 else:
     print("⚠ El superusuario ya existe.")

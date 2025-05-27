@@ -7,6 +7,34 @@ from API_C.utils import generar_codigo_evaluacion
 class Norma(models.Model):
     nombre = models.CharField(max_length=100)
     descripcion = models.TextField()
+    version = models.CharField(max_length=10)
+    fecha_creacion = models.DateTimeField(auto_now_add=True)
+    fecha_actualizacion = models.DateTimeField(auto_now=True)
+    creado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.SET_NULL,
+        null=True,
+        related_name='normas_creadas'
+    )
+    estado = models.CharField(
+        max_length=20,
+        choices=[
+            ('borrador', 'Borrador'),
+            ('revision', 'En Revisión'),
+            ('aprobada', 'Aprobada'),
+            ('obsoleta', 'Obsoleta')
+        ],
+        default='borrador'
+    )
+
+    class Meta:
+        verbose_name = "Norma"
+        verbose_name_plural = "Normas"
+        permissions = [
+            ("can_approve_norma", "Puede aprobar normas"),
+            ("can_review_norma", "Puede revisar normas"),
+            ("can_create_norma", "Puede crear normas"),
+        ]
 
     def __str__(self):
         return self.nombre
