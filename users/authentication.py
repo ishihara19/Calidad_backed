@@ -6,6 +6,7 @@ from rest_framework.exceptions import ValidationError, NotFound,PermissionDenied
 from .models import CustomUser
 from .serializers import LoginSerializer
 from rest_framework.authtoken.models import Token
+
 class LoginView(APIView):
     permission_classes = [AllowAny]
     def post(self, request, *args, **kwargs):        
@@ -24,7 +25,8 @@ class LoginView(APIView):
                     "nombre": full_name,
                     "id": user_instance.document,
                     "email": user_instance.email,
-                    "token":token.key
+                    "token":token.key,
+                    "rol": list(user_instance.groups.values_list('name', flat=True))
                 }               
 
                 return Response( {"user": user}, status=status.HTTP_200_OK)
