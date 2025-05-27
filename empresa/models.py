@@ -3,6 +3,11 @@ from API_C.utils import generate_unique_id, generar_codigo_empresa
 # Create your models here.
 class Empresa(models.Model):
     
+    class TamañoEmpresa(models.TextChoices):
+        PEQUEÑA = 'Pequeña', 'Empresa Pequeña'
+        MEDIANA =  'Mediana', 'Empresa Mediana'
+        GRANDE = 'Grande', 'Empresa Grande'
+    
     id = models.CharField(max_length=14,primary_key=True, editable=False)
     nombre = models.CharField(max_length=100)
     nit = models.CharField(max_length=20, unique=True, blank=False, null=False)
@@ -11,6 +16,8 @@ class Empresa(models.Model):
     telefono = models.CharField(max_length=15)
     fecha_creacion = models.DateTimeField(auto_now_add=True, null=True)
     codigo_empresa = models.CharField(max_length=8,null=True,blank=True)
+    tamaño = models.CharField(max_length=50, choices=TamañoEmpresa.choices,default=TamañoEmpresa.MEDIANA)
+    url = models.URLField(max_length=500, null=True, blank=True)
     
     class Meta:
         verbose_name = 'Empresa'
