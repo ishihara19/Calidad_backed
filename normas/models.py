@@ -2,7 +2,8 @@ from django.db import models
 from django.conf import settings
 from empresa.models import Empresa
 from django.core.validators import MaxValueValidator,MinValueValidator
-from API_C.utils import generar_codigo_evaluacion
+from decimal import Decimal
+
 # Create your models here.
 class Norma(models.Model):
     nombre = models.CharField(max_length=100)
@@ -38,48 +39,85 @@ class Norma(models.Model):
 
     def __str__(self):
         return self.nombre
+    
+    def validar_porcentajes(self):
+        """Valida que los porcentajes de características sumen 100%"""
+        total = sum(car.porcentaje_peso for car in self.caracteristicas.all())
+        return abs(total - Decimal('100.00')) < Decimal('0.01')  # Tolerancia de 0.01%
 
 class Caracteristica(models.Model):
     norma = models.ForeignKey(Norma, on_delete=models.CASCADE, related_name='caracteristicas')
     nombre = models.CharField(max_length=100)
     descripcion = models.TextField()
+    
+    # NUEVO: Porcentaje de peso en la evaluación total
+    porcentaje_peso = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        default=Decimal('0.00'),
+        verbose_name="Porcentaje de peso (%)",
+        help_text="Peso de esta característica en la evaluación total. Todas deben sumar 100%"
+    )
+    
+    # Orden para mostrar en evaluaciones
+    orden = models.PositiveIntegerField(
+        default=1,
+        verbose_name="Orden de presentación"
+    )
+    
+    # Indica si es obligatoria en evaluaciones
+    es_obligatoria = models.BooleanField(
+        default=True,
+        verbose_name="¿Es obligatoria en evaluaciones?"
+    )
+
+    class Meta:
+        verbose_name = "Característica"
+        verbose_name_plural = "Características"
+        ordering = ['orden', 'nombre']
+        unique_together = ['norma', 'nombre']  # No duplicar nombres en la misma norma
 
     def __str__(self):
-        return f"{self.norma.nombre}-{self.nombre}"
+        return f"{self.norma.nombre} - {self.nombre} ({self.porcentaje_peso}%)"
+    
+    def get_numero_subcaracteristicas(self):
+        """Retorna el número de subcaracterísticas"""
+        return self.subcaracteristicas.count()
+    
+    def get_puntuacion_maxima_posible(self):
+        """Calcula la puntuación máxima posible (número de subs * 3)"""
+        return self.subcaracteristicas.count() * 3
 
 class SubCaracteristica(models.Model):
     caracteristica = models.ForeignKey(Caracteristica, on_delete=models.CASCADE, related_name='subcaracteristicas')
     nombre = models.CharField(max_length=100)
     descripcion = models.TextField()
-
-    def __str__(self):
-        return f"{self.caracteristica.nombre}-{self.nombre}"
-
-class CalificacionSubCaracteristica(models.Model):
     
-    usuario = models.ForeignKey(settings.AUTH_USER_MODEL,null=False, on_delete=models.CASCADE, related_name='preguntas_usuario')
-    codigo_calificacion =models.CharField(max_length=10,verbose_name="Codigo unico para evaluacion", null=False, help_text="condigo unico para evaluacion",db_default="")
-    empresa = models.ForeignKey(Empresa, on_delete=models.CASCADE, related_name="preguntas_empresa")
-    subcaracteristica = models.ForeignKey(SubCaracteristica, on_delete=models.CASCADE, related_name='preguntas')
-    observacion = models.TextField(blank=True, null=True)
-    puntos = models.IntegerField(validators=[MinValueValidator(0),MaxValueValidator(3)])
-    fecha_cracion = models.DateTimeField(auto_now_add=True, verbose_name="Fecha de creaion",help_text="Fecha de creacion")
+    # Información adicional para evaluadores
+    criterios_evaluacion = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name="Criterios de evaluación",
+        help_text="Guía específica para evaluar esta subcaracterística"
+    )
+    
+    orden = models.PositiveIntegerField(
+        default=1,
+        verbose_name="Orden de presentación"
+    )
+    
+    es_obligatoria = models.BooleanField(
+        default=True,
+        verbose_name="¿Es obligatoria en evaluaciones?"
+    )
 
-    def save(self, *args, **kwargs):
-        if not self.codigo_calificacion and self.empresa and self.usuario:
-            
-            if hasattr(self.usuario, 'document') and self.empresa.codigo_empresa:
-                 # La función original que tenías.
-                 # Si esta función está diseñada para generar un código *nuevo* siempre, entonces el enfoque de la vista es mejor.
-                self.codigo_calificacion = generar_codigo_evaluacion(
-                    CalificacionSubCaracteristica, 
-                    self.empresa.codigo_empresa, 
-                    self.usuario.document
-                )
-            # else:
-                # Manejar caso donde falten datos para generar el código si es un save individual
-        super().save(*args, **kwargs)
-            
-          
+    class Meta:
+        verbose_name = "Subcaracterística"
+        verbose_name_plural = "Subcaracterísticas"
+        ordering = ['orden', 'nombre']
+        unique_together = ['caracteristica', 'nombre']
+
     def __str__(self):
-        return f"{self.subcaracteristica.nombre}: {self.usuario} - {self.empresa}"
+        return f"{self.caracteristica.nombre} - {self.nombre}"
+

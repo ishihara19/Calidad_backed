@@ -1,224 +1,214 @@
-from rest_framework import serializers  # Para ValidationError en perform_create
-from rest_framework import viewsets
-from .models import Norma, Caracteristica, SubCaracteristica, CalificacionSubCaracteristica
-from .serializers import NormaSerializer, CaracteristicaSerializer, SubCaracteristicaSerializer, CalificacionSubCaracteristicaSerializer
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from empresa.models import Empresa
-from API_C.utils import generar_codigo_evaluacion
-from django.db import transaction
-from .permissions import IsAdminOrReadOnly  # ✅ nuevo import
-from rest_framework.permissions import IsAuthenticated  # ✅ AGREGADO: Import faltante
+from rest_framework import viewsets, status
 from rest_framework.decorators import action
-from .permissions import CanManageNorma
-
+from rest_framework.response import Response
+from django.db.models import Count, Prefetch
+from .models import Norma, Caracteristica, SubCaracteristica
+from .serializers import (
+    # Serializers simples
+    NormaSimpleSerializer, CaracteristicaSimpleSerializer, SubCaracteristicaSimpleSerializer,
+    # Serializers detallados
+    NormaDetailSerializer, CaracteristicaDetailSerializer, SubCaracteristicaDetailSerializer,
+    # Serializers de lista
+    NormaListSerializer, CaracteristicaListSerializer,
+    # Serializers especiales
+    NormaPlantillaSerializer, ValidarPorcentajesSerializer
+)
+from .permissions import IsAdminOrReadOnly, CanManageNorma
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.views import APIView
 class NormaViewSet(viewsets.ModelViewSet):
-    queryset = Norma.objects.all()
-    serializer_class = NormaSerializer
-    permission_classes = [IsAdminOrReadOnly]  # ✅ nuevo control de acceso
     permission_classes = [IsAuthenticated, CanManageNorma]
-
-    def perform_create(self, serializer):
-        serializer.save(creado_por=self.request.user)
-
-    @action(detail=True, methods=['post'])
-    def approve(self, request, pk=None):
+    
+    def get_queryset(self):
+        """Queryset optimizado según la acción"""
+        base_queryset = Norma.objects.select_related('creado_por')
+        
+        if self.action == 'list':
+            # Para listados: solo contar características (sin cargar datos)
+            return base_queryset.annotate(
+                numero_caracteristicas=Count('caracteristicas')
+            )
+        
+        elif self.action == 'retrieve':
+            # Para detalle: prefetch completo optimizado
+            return base_queryset.prefetch_related(
+                Prefetch(
+                    'caracteristicas',
+                    queryset=Caracteristica.objects.order_by('orden').prefetch_related(
+                        Prefetch(
+                            'subcaracteristicas',
+                            queryset=SubCaracteristica.objects.order_by('orden')
+                        )
+                    )
+                )
+            )
+        
+        elif self.action == 'plantilla_evaluacion':
+            # Para plantillas: solo características y subcaracterísticas obligatorias
+            return base_queryset.prefetch_related(
+                Prefetch(
+                    'caracteristicas',
+                    queryset=Caracteristica.objects.filter(es_obligatoria=True).order_by('orden').prefetch_related(
+                        Prefetch(
+                            'subcaracteristicas',
+                            queryset=SubCaracteristica.objects.filter(es_obligatoria=True).order_by('orden')
+                        )
+                    )
+                )
+            )
+        
+        return base_queryset
+    
+    def get_serializer_class(self):
+        """Serializer dinámico según la acción"""
+        if self.action == 'list':
+            return NormaListSerializer
+        elif self.action == 'retrieve':
+            return NormaDetailSerializer
+        elif self.action == 'plantilla_evaluacion':
+            return NormaPlantillaSerializer
+        return NormaSimpleSerializer
+    
+    @action(detail=True, methods=['get'])
+    def plantilla_evaluacion(self, request, pk=None):
+        """Obtener plantilla optimizada para evaluación"""
         norma = self.get_object()
-        norma.estado = 'aprobada'
-        norma.save()
-        return Response({'status': 'norma aprobada'})
-
+        serializer = self.get_serializer(norma)
+        return Response(serializer.data)
+    
     @action(detail=True, methods=['post'])
-    def review(self, request, pk=None):
+    def validar_porcentajes(self, request, pk=None):
+        """Validar que los porcentajes sumen 100%"""
         norma = self.get_object()
-        norma.estado = 'revision'
-        norma.save()
-        return Response({'status': 'norma en revisión'})
+        
+        total_porcentaje = sum(
+            car.porcentaje_peso for car in norma.caracteristicas.all()
+        )
+        
+        es_valido = abs(total_porcentaje - 100.00) < 0.01
+        
+        return Response({
+            'es_valido': es_valido,
+            'total_porcentaje': float(total_porcentaje),
+            'diferencia': float(100.00 - total_porcentaje),
+            'message': 'Porcentajes válidos' if es_valido else f'Los porcentajes suman {total_porcentaje}%, no 100%'
+        })
+    
+    @action(detail=False, methods=['get'])
+    def estadisticas(self, request):
+        """Estadísticas generales de normas"""
+        estadisticas = {
+            'total_normas': Norma.objects.count(),
+            'normas_aprobadas': Norma.objects.filter(estado='aprobada').count(),
+            'normas_borrador': Norma.objects.filter(estado='borrador').count(),
+            'total_caracteristicas': Caracteristica.objects.count(),
+            'total_subcaracteristicas': SubCaracteristica.objects.count(),
+        }
+        
+        # Top normas más utilizadas (si tienes evaluaciones)
+        try:
+            from evaluaciones.models import Evaluacion
+            normas_utilizadas = Evaluacion.objects.values(
+                'norma__nombre'
+            ).annotate(
+                count=Count('id')
+            ).order_by('-count')[:5]
+            
+            estadisticas['normas_mas_utilizadas'] = list(normas_utilizadas)
+        except ImportError:
+            estadisticas['normas_mas_utilizadas'] = []
+        
+        return Response(estadisticas)
 
 class CaracteristicaViewSet(viewsets.ModelViewSet):
-    queryset = Caracteristica.objects.all()
-    serializer_class = CaracteristicaSerializer
     permission_classes = [IsAdminOrReadOnly]
+    
+    def get_queryset(self):
+        base_queryset = Caracteristica.objects.select_related('norma')
+        
+        if self.action == 'list':
+            return base_queryset.annotate(
+                numero_subcaracteristicas=Count('subcaracteristicas')
+            )
+        elif self.action == 'retrieve':
+            return base_queryset.prefetch_related('subcaracteristicas')
+        
+        return base_queryset
+    
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return CaracteristicaListSerializer
+        elif self.action == 'retrieve':
+            return CaracteristicaDetailSerializer
+        return CaracteristicaSimpleSerializer
+    
+    @action(detail=True, methods=['get'])
+    def subcaracteristicas(self, request, pk=None):
+        """Obtener solo las subcaracterísticas de esta característica"""
+        caracteristica = self.get_object()
+        subcaracteristicas = caracteristica.subcaracteristicas.order_by('orden')
+        
+        serializer = SubCaracteristicaSimpleSerializer(subcaracteristicas, many=True)
+        return Response({
+            'caracteristica': caracteristica.nombre,
+            'subcaracteristicas': serializer.data
+        })
 
 class SubCaracteristicaViewSet(viewsets.ModelViewSet):
-    queryset = SubCaracteristica.objects.all()
-    serializer_class = SubCaracteristicaSerializer
     permission_classes = [IsAdminOrReadOnly]
-
-class CalificacionSubCaracteristicaViewSet(viewsets.ModelViewSet):
-    queryset = CalificacionSubCaracteristica.objects.all()
-    serializer_class = CalificacionSubCaracteristicaSerializer
-    permission_classes = [IsAuthenticated]  # solo usuarios autenticados pueden calificar
     
-    def perform_create(self, serializer):
-        usuario = self.request.user
-        # ✅ MEJORADO: Validar que el usuario tenga empresa asignada
-        if not hasattr(usuario, 'empresa') or not usuario.empresa:
-            raise serializers.ValidationError("El usuario no tiene una empresa asignada.")
+    def get_queryset(self):
+        return SubCaracteristica.objects.select_related(
+            'caracteristica__norma'
+        ).order_by('caracteristica__orden', 'orden')
+    
+    def get_serializer_class(self):
+        if self.action in ['list', 'retrieve']:
+            return SubCaracteristicaDetailSerializer
+        return SubCaracteristicaSimpleSerializer
+    
+    def list(self, request, *args, **kwargs):
+        """Listado optimizado con filtros"""
+        queryset = self.get_queryset()
         
-        empresa = usuario.empresa 
-        codigo_empresa = empresa.codigo_empresa
-        serializer.save(usuario=usuario, empresa=empresa, codigo_empresa=codigo_empresa)
+        # Filtros opcionales
+        caracteristica_id = request.query_params.get('caracteristica')
+        norma_id = request.query_params.get('norma')
+        solo_obligatorias = request.query_params.get('obligatorias') == 'true'
         
-class CalificacionesBatchView(APIView):
-    permission_classes = [IsAuthenticated] # ¡Importante para la seguridad!
-
-    def post(self, request):
-        usuario = request.user
-        empresa_id = request.data.get('empresa')  # ✅ RENOMBRADO: Más claro
+        if caracteristica_id:
+            queryset = queryset.filter(caracteristica_id=caracteristica_id)
+        if norma_id:
+            queryset = queryset.filter(caracteristica__norma_id=norma_id)
+        if solo_obligatorias:
+            queryset = queryset.filter(es_obligatoria=True)
         
-        # ✅ MEJORADO: Validación inicial de empresa_id
-        if not empresa_id:
-            return Response(
-                {"error": "El campo 'empresa' es requerido."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        # ✅ MEJORADO: Manejo de empresa
-        try:
-            empresa_obj = Empresa.objects.get(id=empresa_id)
-        except Empresa.DoesNotExist:
-            return Response(
-                {"error": "Empresa no encontrada"}, 
-                status=status.HTTP_404_NOT_FOUND
-            )
-        except ValueError:  # ✅ AGREGADO: Por si empresa_id no es un número válido
-            return Response(
-                {"error": "El ID de empresa debe ser un número válido."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-            
-        empresa_actual = empresa_obj
-        print(f"Empresa actual: {empresa_actual}")  # ✅ MEJORADO: f-string más legible
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
-        # Validar que el usuario y la empresa tengan los campos necesarios para generar el código
-        if not hasattr(usuario, 'document') or not usuario.document:
-            return Response(
-                {"error": "Falta el documento del usuario para generar el código de evaluación."}, 
-                status=status.HTTP_400_BAD_REQUEST
+# ✅ VISTA ADICIONAL PARA CASOS ESPECÍFICOS
+class NormasPlantillasView(APIView):
+    """Vista específica para obtener plantillas de evaluación de múltiples normas"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Obtener plantillas de todas las normas aprobadas"""
+        normas = Norma.objects.filter(
+            estado='aprobada'
+        ).prefetch_related(
+            Prefetch(
+                'caracteristicas',
+                queryset=Caracteristica.objects.filter(es_obligatoria=True).order_by('orden').prefetch_related(
+                    Prefetch(
+                        'subcaracteristicas',
+                        queryset=SubCaracteristica.objects.filter(es_obligatoria=True).order_by('orden')
+                    )
+                )
             )
-        if not hasattr(empresa_actual, 'codigo_empresa') or not empresa_actual.codigo_empresa:
-            return Response(
-                {"error": "Falta el código de la empresa para generar el código de evaluación."}, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        calificaciones_data = request.data.get("calificaciones", [])
-        print(f"Calificaciones data: {calificaciones_data}")  # ✅ MEJORADO: f-string
-        
-        if not isinstance(calificaciones_data, list) or not calificaciones_data:
-            return Response(
-                {"error": "Se esperaba una lista no vacía de 'calificaciones'."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # ✅ MEJORADO: Generación del código con mejor manejo de errores
-        try:
-            codigo_evaluacion_lote = generar_codigo_evaluacion(
-                CalificacionSubCaracteristica,
-                empresa_actual.codigo_empresa,
-                usuario.document
-            )
-        except Exception as e:  # ✅ AGREGADO: Captura errores de la función
-            return Response(
-                {"error": f"Error al generar el código de evaluación: {str(e)}"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-            
-        if not codigo_evaluacion_lote:
-            return Response(
-                {"error": "No se pudo generar el código de evaluación para el lote."}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
-
-        # ✅ MEJORADO: Crear contexto más completo para el serializer
-        serializer = CalificacionSubCaracteristicaSerializer(
-            data=calificaciones_data, 
-            many=True, 
-            context={
-                'request': request,
-                'usuario': usuario,
-                'empresa': empresa_actual
-            }
         )
-
-        if serializer.is_valid():
-            calificaciones_para_crear = []
-            
-            # ✅ MEJORADO: Validación adicional antes de crear objetos
-            for item_validado in serializer.validated_data:
-                # Verificar que la subcaracterística existe
-                if not item_validado.get('subcaracteristica'):
-                    return Response(
-                        {"error": "Todas las calificaciones deben tener una subcaracterística válida."}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-                
-                calificaciones_para_crear.append(
-                    CalificacionSubCaracteristica(
-                        usuario=usuario,
-                        empresa=empresa_actual,
-                        subcaracteristica=item_validado['subcaracteristica'],
-                        puntos=item_validado['puntos'],
-                        observacion=item_validado.get('observacion', ""),
-                        codigo_calificacion=codigo_evaluacion_lote
-                    )
-                )
-
-            try:
-                with transaction.atomic():
-                    # ✅ MEJORADO: Usar bulk_create para mejor rendimiento
-                    instancias_creadas = CalificacionSubCaracteristica.objects.bulk_create(
-                        calificaciones_para_crear
-                    )
-                    
-                    # ✅ NOTA: bulk_create no activa signals ni retorna IDs en algunas versiones
-                    # Si necesitas los IDs o signals, usa el método original:
-                    # instancias_creadas = []
-                    # for calificacion_obj in calificaciones_para_crear:
-                    #     calificacion_obj.save() 
-                    #     instancias_creadas.append(calificacion_obj)
-                    
-                # ✅ MEJORADO: Si usas bulk_create, necesitas refrescar los datos
-                if instancias_creadas:
-                    # Obtener las instancias recién creadas para serializar
-                    instancias_recientes = CalificacionSubCaracteristica.objects.filter(
-                        codigo_calificacion=codigo_evaluacion_lote,
-                        usuario=usuario,
-                        empresa=empresa_actual
-                    )
-                    resultado_serializer = CalificacionSubCaracteristicaSerializer(
-                        instancias_recientes, 
-                        many=True
-                    )
-                else:
-                    # ✅ AGREGADO: Caso cuando bulk_create no funciona como esperado
-                    resultado_serializer = CalificacionSubCaracteristicaSerializer(
-                        instancias_creadas, 
-                        many=True
-                    )
-                
-                return Response(
-                    {
-                        "message": "Calificaciones creadas exitosamente",
-                        "codigo_evaluacion": codigo_evaluacion_lote,
-                        "calificaciones": resultado_serializer.data
-                    }, 
-                    status=status.HTTP_201_CREATED
-                )
-            
-            except Exception as e: 
-                return Response(
-                    {"error": f"Ocurrió un error al guardar las calificaciones en la base de datos: {str(e)}"},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-        else:
-            # ✅ MEJORADO: Respuesta de error más detallada
-            return Response(
-                {
-                    "error": "Datos de calificaciones inválidos",
-                    "detalles": serializer.errors
-                }, 
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        
+        serializer = NormaPlantillaSerializer(normas, many=True)
+        return Response({
+            'plantillas_disponibles': serializer.data,
+            'total_normas': normas.count()
+        })

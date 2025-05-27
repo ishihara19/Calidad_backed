@@ -39,14 +39,14 @@ def generar_codigo_evaluacion(model, codigo_empresa, documento_evaluador):
 
         # Si el contador es 0, usa el código base. Si no, añade el contador.
         if contador == 0:
-            codigo_calificacion = codigo_base
+            codigo_evaluacion = codigo_base
         else:
-            codigo_calificacion = f"{codigo_base}-{contador}"
+            codigo_evaluacion = f"{codigo_base}-{contador}"
 
         # Verifica si el código_calificacion ya existe en la base de datos
-        if not model.objects.filter(codigo_calificacion=codigo_calificacion).exists():
+        if not model.objects.filter(codigo_evaluacion=codigo_evaluacion).exists():
             # Si no existe, devuelve el ID generado
-            return codigo_calificacion
+            return codigo_evaluacion
         else:
             # Si existe, incrementa el contador y el bucle continuará
             contador += 1           
