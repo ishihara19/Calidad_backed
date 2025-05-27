@@ -12,10 +12,14 @@ from .serializers import (
     EvaluacionSerializer, 
     CalificacionCaracteristicaSerializer,
     CalificacionSubCaracteristicaSerializer,
-    EvaluacionCompletaSerializer
+    EvaluacionCompletaFlexibleSerializer,  # NUEVO
+    NormaParaEvaluacionSerializer
 )
 from .permissions import EvaluacionPermission
 from software.models import Software
+from normas.models import Norma
+from rest_framework import serializers
+from django.db.models import Count
 
 class EvaluacionViewSet(viewsets.ModelViewSet):
     """
@@ -71,18 +75,16 @@ class EvaluacionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        # Verificar que todas las características obligatorias estén calificadas
-        caracteristicas_obligatorias = evaluacion.norma.caracteristicas.filter(es_obligatoria=True)
-        calificaciones_existentes = evaluacion.calificaciones_caracteristica.values_list(
-            'caracteristica_id', flat=True
+        # Verificar que los porcentajes sumen 100%
+        total_porcentaje = sum(
+            cal.porcentaje_asignado for cal in evaluacion.calificaciones_caracteristica.all()
         )
         
-        faltantes = caracteristicas_obligatorias.exclude(id__in=calificaciones_existentes)
-        if faltantes.exists():
+        if abs(total_porcentaje - 100) > 0.01:
             return Response(
                 {
-                    'error': 'Faltan calificaciones para características obligatorias',
-                    'caracteristicas_faltantes': list(faltantes.values_list('nombre', flat=True))
+                    'error': 'Los porcentajes de características deben sumar 100%',
+                    'total_actual': float(total_porcentaje)
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
@@ -126,7 +128,7 @@ class EvaluacionViewSet(viewsets.ModelViewSet):
             
             caracteristica_info = {
                 'caracteristica': cal_car.caracteristica.nombre,
-                'porcentaje_peso': cal_car.caracteristica.porcentaje_peso,
+                'porcentaje_asignado': cal_car.porcentaje_asignado,
                 'puntuacion_obtenida': cal_car.puntuacion_obtenida,
                 'numero_subcaracteristicas': cal_subs.count(),
                 'detalle_subcaracteristicas': []
@@ -155,6 +157,139 @@ class EvaluacionViewSet(viewsets.ModelViewSet):
             reporte_data['resumen_por_caracteristica'].append(caracteristica_info)
         
         return Response(reporte_data)
+
+# NUEVA Vista específica para el flujo del frontend
+class EvaluacionFlexibleView(APIView):
+    """
+    Vista para crear evaluaciones completas siguiendo el flujo del frontend
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """
+        Crear evaluación completa con estructura flexible:
+        {
+            "software": 1,
+            "norma": 1,
+            "observaciones_generales": "...",
+            "calificaciones": [
+                {
+                    "caracteristica_id": 1,
+                    "porcentaje_asignado": 40.0,
+                    "observaciones": "...",
+                    "subcaracteristicas": [
+                        {
+                            "subcaracteristica_id": 1,
+                            "puntos": 3,
+                            "observacion": "Excelente implementación",
+                            "evidencia_url": "https://..."
+                        },
+                        {
+                            "subcaracteristica_id": 3,
+                            "puntos": 2,
+                            "observacion": "Buena pero mejorable"
+                        }
+                    ]
+                },
+                {
+                    "caracteristica_id": 2,
+                    "porcentaje_asignado": 60.0,
+                    "observaciones": "...",
+                    "subcaracteristicas": [
+                        {
+                            "subcaracteristica_id": 4,
+                            "puntos": 1,
+                            "observacion": "Necesita mejoras"
+                        }
+                    ]
+                }
+            ]
+        }
+        """
+        serializer = EvaluacionCompletaFlexibleSerializer(
+            data=request.data,
+            context={'request': request}
+        )
+        
+        if serializer.is_valid():
+            try:
+                evaluacion = serializer.save()
+                return Response(
+                    {
+                        'message': 'Evaluación creada exitosamente',
+                        'evaluacion': EvaluacionSerializer(evaluacion, context={'request': request}).data
+                    },
+                    status=status.HTTP_201_CREATED
+                )
+            except Exception as e:
+                return Response(
+                    {'error': f'Error al crear la evaluación: {str(e)}'},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+        
+        return Response(
+            {'errors': serializer.errors},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+class NormaParaEvaluacionView(APIView):
+    """
+    Vista para obtener la estructura de una norma para evaluación
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, norma_id):
+        """
+        Obtener estructura completa de una norma para el frontend:
+        - Todas las características con sus subcaracterísticas
+        - Sin porcentajes predefinidos (el usuario los asigna)
+        """
+        try:
+            norma = Norma.objects.prefetch_related(
+                'caracteristicas__subcaracteristicas'
+            ).get(id=norma_id)
+        except Norma.DoesNotExist:
+            return Response(
+                {'error': 'Norma no encontrada'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = NormaParaEvaluacionSerializer(norma)
+        return Response(serializer.data)
+
+class ValidarPorcentajesView(APIView):
+    """
+    Vista para validar que los porcentajes sumen 100%
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """
+        Validar porcentajes antes de enviar la evaluación:
+        {
+            "porcentajes": [
+                {"caracteristica_id": 1, "porcentaje": 40.0},
+                {"caracteristica_id": 2, "porcentaje": 60.0}
+            ]
+        }
+        """
+        porcentajes = request.data.get('porcentajes', [])
+        
+        if not isinstance(porcentajes, list):
+            return Response(
+                {'error': 'Se esperaba una lista de porcentajes'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        total = sum(p.get('porcentaje', 0) for p in porcentajes)
+        es_valido = abs(total - 100) <= 0.01
+        
+        return Response({
+            'es_valido': es_valido,
+            'total_porcentaje': round(total, 2),
+            'diferencia': round(100 - total, 2),
+            'message': 'Porcentajes válidos' if es_valido else f'Los porcentajes suman {total}%, no 100%'
+        })
 
 class CalificacionCaracteristicaViewSet(viewsets.ModelViewSet):
     """
@@ -190,66 +325,6 @@ class CalificacionSubCaracteristicaViewSet(viewsets.ModelViewSet):
         
         return CalificacionSubCaracteristica.objects.filter(
             calificacion_caracteristica__evaluacion__empresa=user.empresa
-        )
-
-class EvaluacionCompletaView(APIView):
-    """
-    Vista para crear evaluaciones completas con todas las calificaciones
-    """
-    permission_classes = [IsAuthenticated]
-    
-    def post(self, request):
-        """
-        Crear evaluación completa con estructura:
-        {
-            "software": 1,
-            "norma": 1,
-            "observaciones_generales": "...",
-            "calificaciones": [
-                {
-                    "caracteristica_id": 1,
-                    "observaciones": "...",
-                    "subcaracteristicas": [
-                        {
-                            "subcaracteristica_id": 1,
-                            "puntos": 3,
-                            "observacion": "Excelente implementación",
-                            "evidencia_url": "https://..."
-                        },
-                        {
-                            "subcaracteristica_id": 2,
-                            "puntos": 2,
-                            "observacion": "Buena pero mejorable"
-                        }
-                    ]
-                }
-            ]
-        }
-        """
-        serializer = EvaluacionCompletaSerializer(
-            data=request.data,
-            context={'request': request}
-        )
-        
-        if serializer.is_valid():
-            try:
-                evaluacion = serializer.save()
-                return Response(
-                    {
-                        'message': 'Evaluación creada exitosamente',
-                        'evaluacion': EvaluacionSerializer(evaluacion, context={'request': request}).data
-                    },
-                    status=status.HTTP_201_CREATED
-                )
-            except Exception as e:
-                return Response(
-                    {'error': f'Error al crear la evaluación: {str(e)}'},
-                    status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                )
-        
-        return Response(
-            {'errors': serializer.errors},
-            status=status.HTTP_400_BAD_REQUEST
         )
 
 class MisSoftwaresView(APIView):
@@ -299,6 +374,34 @@ class MisSoftwaresView(APIView):
         return Response({
             'empresa': user.empresa.nombre,
             'softwares': software_data
+        })
+
+class NormasDisponiblesView(APIView):
+    """
+    Vista para obtener las normas disponibles para evaluación
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Obtener normas aprobadas disponibles"""
+        normas = Norma.objects.filter(estado='aprobada').annotate(
+            numero_caracteristicas=Count('caracteristicas')
+        )
+        
+        normas_data = []
+        for norma in normas:
+            normas_data.append({
+                'id': norma.id,
+                'nombre': norma.nombre,
+                'descripcion': norma.descripcion,
+                'version': norma.version,
+                'numero_caracteristicas': norma.numero_caracteristicas,
+                'fecha_creacion': norma.fecha_creacion
+            })
+        
+        return Response({
+            'normas_disponibles': normas_data,
+            'total': len(normas_data)
         })
 
 class EstadisticasEmpresaView(APIView):

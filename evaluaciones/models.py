@@ -75,11 +75,10 @@ class Evaluacion(models.Model):
     class Meta:
         verbose_name = "Evaluación"
         verbose_name_plural = "Evaluaciones"
-        unique_together = ['software', 'norma', 'evaluador']  # Una evaluación por software/norma/evaluador
+        unique_together = ['software', 'norma', 'evaluador']
         
     def save(self, *args, **kwargs):
         if not self.codigo_evaluacion:
-            # Generar código usando empresa y evaluador
             self.codigo_evaluacion = generar_codigo_evaluacion(
                 Evaluacion,
                 self.empresa.codigo_empresa if self.empresa.codigo_empresa else 'SIN',
@@ -96,8 +95,13 @@ class Evaluacion(models.Model):
         if not calificaciones.exists():
             return Decimal('0.00')
         
+        # Verificar que los porcentajes sumen 100%
+        total_porcentaje = sum(cal.porcentaje_asignado for cal in calificaciones)
+        if abs(total_porcentaje - 100) > 0.01:
+            raise ValueError(f"Los porcentajes deben sumar 100%. Actual: {total_porcentaje}%")
+        
         total_ponderado = sum(
-            (cal.puntuacion_obtenida * cal.caracteristica.porcentaje_peso) / 100
+            (cal.puntuacion_obtenida * cal.porcentaje_asignado) / 100
             for cal in calificaciones
         )
         return round(Decimal(str(total_ponderado)), 2)
@@ -105,6 +109,7 @@ class Evaluacion(models.Model):
 class CalificacionCaracteristica(models.Model):
     """
     Calificación de una característica específica dentro de una evaluación
+    AHORA incluye el porcentaje asignado dinámicamente
     """
     evaluacion = models.ForeignKey(
         Evaluacion,
@@ -115,6 +120,15 @@ class CalificacionCaracteristica(models.Model):
         Caracteristica,
         on_delete=models.CASCADE,
         related_name='calificaciones'
+    )
+    
+    # NUEVO: Porcentaje asignado dinámicamente en esta evaluación
+    porcentaje_asignado = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        verbose_name="Porcentaje asignado a esta característica (%)",
+        help_text="Porcentaje del peso de esta característica en esta evaluación específica"
     )
     
     # Resultados de la característica
@@ -144,17 +158,17 @@ class CalificacionCaracteristica(models.Model):
         unique_together = ['evaluacion', 'caracteristica']
         
     def __str__(self):
-        return f"{self.evaluacion.codigo_evaluacion} - {self.caracteristica.nombre}: {self.puntuacion_obtenida}%"
+        return f"{self.evaluacion.codigo_evaluacion} - {self.caracteristica.nombre}: {self.puntuacion_obtenida}% ({self.porcentaje_asignado}%)"
     
     def calcular_puntuacion_caracteristica(self):
         """
-        Calcula la puntuación de la característica basada en sus subcaracterísticas
+        Calcula la puntuación de la característica basada en las subcaracterísticas SELECCIONADAS
         """
         calificaciones_sub = self.calificaciones_subcaracteristica.all()
         if not calificaciones_sub.exists():
             return Decimal('0.00')
         
-        # Promedio de subcaracterísticas convertido a porcentaje
+        # Suma de puntos obtenidos vs máximo posible de las subcaracterísticas seleccionadas
         total_puntos = sum(cal.puntos for cal in calificaciones_sub)
         max_puntos = calificaciones_sub.count() * 3  # 3 es el máximo por subcaracterística
         
@@ -163,10 +177,29 @@ class CalificacionCaracteristica(models.Model):
             
         porcentaje = (total_puntos / max_puntos) * 100
         return round(Decimal(str(porcentaje)), 2)
+    
+    
+    def clean(self):
+        """Validaciones adicionales"""
+        super().clean()
+        
+        # Validar que la suma de porcentajes en la evaluación no exceda 100%
+        if self.evaluacion_id:
+            otras_calificaciones = CalificacionCaracteristica.objects.filter(
+                evaluacion=self.evaluacion
+            ).exclude(id=self.id)
+            
+            total_otros = sum(cal.porcentaje_asignado for cal in otras_calificaciones)
+            if total_otros + self.porcentaje_asignado > 100:
+                from django.core.exceptions import ValidationError
+                raise ValidationError(
+                    f"La suma de porcentajes no puede exceder 100%. "
+                    f"Otros: {total_otros}%, Este: {self.porcentaje_asignado}%"
+                )
 
 class CalificacionSubCaracteristica(models.Model):
     """
-    Calificación individual de subcaracterísticas (migrado desde normas/)
+    Calificación individual de subcaracterísticas
     """
     calificacion_caracteristica = models.ForeignKey(
         CalificacionCaracteristica,
