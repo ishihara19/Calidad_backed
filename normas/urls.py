@@ -14,5 +14,7 @@ urlpatterns = [
     path('listar-norma/<pk>',NormaViewSet.as_view({'get':'retrieve'})),
     path('listar-pregintas',CalificacionSubCaracteristicaViewSet.as_view({'get':'list'})),
     path('crear-pregunta',CalificacionSubCaracteristicaViewSet.as_view({'post':'create'})),
-    path('crear-mult-preguntas', CalificacionesBatchView.as_view())
+    path('crear-mult-preguntas',CalificacionesBatchView.as_view()),
+    path('normas/<int:pk>/approve/',NormaViewSet.as_view({'post': 'approve'}),name='norma-approve'),
+    path('normas/<int:pk>/review/',NormaViewSet.as_view({'post': 'review'}),name='norma-review'),
 ]

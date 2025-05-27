@@ -70,6 +70,7 @@ ROOT_URLCONF = 'API_C.urls'
 CORS_ALLOWED_ORIGINS = [
     "https://tusitio.com",
     "http://localhost:5173",  # Por ejemplo, para React en local
+    "http://localhost:5174",  # Por ejemplo, para React en local
 ]
 
 TEMPLATES = [
