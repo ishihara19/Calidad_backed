@@ -43,15 +43,13 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'rest_framework',
     'corsheaders',
-    'users',
-    #'parametros',
-    #'evaluacion',
-    #'preguntas',
+    'users',    
     'django_filters',
     'drf_yasg',
     'empresa',
     'normas',
     'matriz',
+    'software',
 ]
 AUTH_USER_MODEL = 'users.CustomUser'
 

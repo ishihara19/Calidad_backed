@@ -39,6 +39,7 @@ urlpatterns = [
     path('api/users/', include('users.urls')),
     path('api/normas/', include('normas.urls')),
     path('api/empresas/', include('empresa.urls')),
+    path('api/software/', include('software.urls')),
     
     #path('api/v1/', include('preguntas.urls')),  # Reemplaza 'tu_app' con el nombre real de tu aplicación
     path('api-auth/', include('rest_framework.urls', namespace='rest_framework')),
